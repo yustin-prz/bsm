@@ -36,9 +36,28 @@ def pack_name_from_manifest(manifest):
 def pack_uuid_from_manifest(manifest):
     return manifest.get("header", {}).get("uuid", "")
 
+def parse_version(v):
+    """Normalize a pack version to a [major, minor, patch] int list.
+    Handles both list versions ([1,1,35]) and string versions ('1.1.35'),
+    which manifest format_version 3 packs (e.g. Actions & Stuff) use."""
+    if isinstance(v, list):
+        nums = [int(x) for x in v[:3] if str(x).lstrip("-").isdigit()]
+    elif isinstance(v, str):
+        nums = []
+        for p in v.strip().split(".")[:3]:
+            try:
+                nums.append(int(p))
+            except ValueError:
+                nums.append(0)
+    else:
+        nums = []
+    while len(nums) < 3:
+        nums.append(0)
+    return nums[:3]
+
+
 def pack_version_from_manifest(manifest):
-    v = manifest.get("header", {}).get("version", [1, 0, 0])
-    return v
+    return parse_version(manifest.get("header", {}).get("version", [1, 0, 0]))
 
 def safe_folder_name(name):
     return "".join(c if c.isalnum() or c in "._- " else "_" for c in name).strip()
@@ -310,11 +329,33 @@ class PackInstaller:
         root = "behavior_packs" if kind == "behavior" else "resource_packs"
         return os.path.join(self.server_dir, root, folder)
 
+    def subpack_state(self, kind, folder):
+        """Return (options, active_folder). options = [{folder, name}].
+        If a subpack is currently forced, read the saved options/active from
+        metadata (the live manifest no longer lists them); otherwise read the
+        live manifest so the user can pick."""
+        key = f"{kind}/{folder}"
+        forced = self._load_meta().get("forced", {}).get(key)
+        if forced:
+            return forced.get("options", []), forced.get("active")
+        cfg = read_pack_config(self._pack_dir(kind, folder)) or {"subpacks": []}
+        return cfg.get("subpacks", []), None
+
     def force_subpack(self, kind, folder, subpack_folder, uuid=None):
         """Bake a subpack into the pack root so every client gets that variant
-        (the only way to fix a subpack server-side). Backs up the pack first and
-        bumps the version so clients re-download."""
+        (Bedrock has no JSON field for subpack selection, so baking is the only
+        server-side way). Always starts from the original pack — so you can switch
+        between subpacks freely — backs it up, and bumps the version so clients
+        re-download. Returns the active subpack's display name."""
         pack_dir = self._pack_dir(kind, folder)
+        # Always bake from the ORIGINAL pack so switching subpacks works.
+        if self.has_backup(kind, folder):
+            self._restore_files(kind, folder)
+        # Capture the (resolved) subpack options before we strip them.
+        cfg = read_pack_config(pack_dir) or {"subpacks": []}
+        options = cfg.get("subpacks", [])
+        active_name = next((o["name"] for o in options if o["folder"] == subpack_folder),
+                           subpack_folder)
         sp_dir = os.path.join(pack_dir, "subpacks", subpack_folder)
         if not os.path.isdir(sp_dir):
             raise ValueError("No se encontró la carpeta del subpack.")
@@ -336,11 +377,18 @@ class PackInstaller:
             with open(mpath, encoding="utf-8") as f:
                 m = json.load(f)
             m.pop("subpacks", None)
-            ver = m.get("header", {}).get("version", [1, 0, 0])
-            if isinstance(ver, list) and len(ver) == 3:
-                ver = [ver[0], ver[1], ver[2] + 1]   # bump patch
-                m["header"]["version"] = ver
-                new_version = ver
+            # Bump from the CURRENT world-json version (not the original) so that
+            # switching between subpacks always yields a higher version and clients
+            # actually re-download the changed files. parse_version handles both
+            # list and string ('1.1.35') version formats.
+            base = parse_version(m.get("header", {}).get("version", [1, 0, 0]))
+            if uuid:
+                for e in self._load_world_json(kind):
+                    if e.get("pack_id") == uuid:
+                        base = parse_version(e.get("version", base))
+                        break
+            new_version = [base[0], base[1], base[2] + 1]
+            m.setdefault("header", {})["version"] = new_version
             with open(mpath, "w", encoding="utf-8") as f:
                 json.dump(m, f, indent=2)
         except Exception:
@@ -352,11 +400,18 @@ class PackInstaller:
                 if e.get("pack_id") == uuid:
                     e["version"] = new_version
             self._save_world_json(kind, entries)
+        # remember what is active (so the UI can show it and offer switching)
+        meta = self._load_meta()
+        meta.setdefault("forced", {})[f"{kind}/{folder}"] = {
+            "active": subpack_folder, "name": active_name,
+            "options": options, "version": new_version}
+        self._save_meta(meta)
+        return active_name
 
     def has_backup(self, kind, folder):
         return os.path.isdir(self._pack_dir(kind, folder) + ".bak")
 
-    def restore_pack(self, kind, folder):
+    def _restore_files(self, kind, folder):
         pack_dir = self._pack_dir(kind, folder)
         backup = pack_dir + ".bak"
         if not os.path.isdir(backup):
@@ -364,6 +419,14 @@ class PackInstaller:
         shutil.rmtree(pack_dir, ignore_errors=True)
         shutil.move(backup, pack_dir)
         return True
+
+    def restore_pack(self, kind, folder):
+        ok = self._restore_files(kind, folder)
+        if ok:
+            meta = self._load_meta()
+            meta.get("forced", {}).pop(f"{kind}/{folder}", None)
+            self._save_meta(meta)
+        return ok
 
     def remove_group_meta(self, source):
         meta = self._load_meta()

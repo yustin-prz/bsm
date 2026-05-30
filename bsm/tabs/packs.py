@@ -52,32 +52,39 @@ class PackConfigDialog(QDialog):
         cfg = read_pack_config(self.pack_dir) or {"subpacks": [], "settings": []}
         installer = PackInstaller(self.tab.parent.server_dir, self.tab.parent.world_path() or "")
         has_bak = installer.has_backup(self.target["kind"], self.target["folder"])
+        options, active = installer.subpack_state(self.target["kind"], self.target["folder"])
 
         # ── Subpacks (forceable) ──
         sp_group = QGroupBox("  Subpacks (variantes del pack)")
         spl = QVBoxLayout(sp_group)
-        if cfg["subpacks"]:
-            hint = QLabel("Elige una variante y fíjala para TODOS los jugadores del servidor. "
-                          "Se hace una copia de seguridad (.bak) por si quieres revertir.")
+        if options:
+            hint = QLabel("Elige una variante y fíjala para TODOS los jugadores del servidor.\n"
+                          "Nota: Bedrock no guarda el subpack en el .json; se aplica directamente "
+                          "a los archivos del pack y se sube su versión. Se hace copia (.bak) para revertir.")
             hint.setObjectName("subtitle")
             hint.setWordWrap(True)
             spl.addWidget(hint)
+            if active:
+                act_name = next((o["name"] for o in options if o["folder"] == active), active)
+                cur = QLabel(f"✅  Subpack activo ahora: {act_name}")
+                cur.setStyleSheet(f"color: {GREEN}; font-weight: bold;")
+                cur.setWordWrap(True)
+                spl.addWidget(cur)
             self.sp_buttons = []
-            for sp in cfg["subpacks"]:
+            for sp in options:
                 rb = QCheckBox(sp["name"])        # checkboxes acting as exclusive radios
+                if sp["folder"] == active:
+                    rb.setChecked(True)
                 rb.clicked.connect(lambda _ck, b=rb: self._exclusive(b))
                 self.sp_buttons.append((rb, sp))
                 spl.addWidget(rb)
-            force_btn = QPushButton("✅  Forzar el subpack seleccionado para todos")
+            force_btn = QPushButton("✅  Aplicar el subpack seleccionado para todos")
             force_btn.setObjectName("success")
             force_btn.clicked.connect(self._force)
             spl.addWidget(force_btn)
         else:
             self.sp_buttons = []
-            if has_bak:
-                spl.addWidget(QLabel("Ya se fijó un subpack en este pack (hay copia .bak)."))
-            else:
-                spl.addWidget(QLabel("Este pack no define subpacks."))
+            spl.addWidget(QLabel("Este pack no define subpacks."))
         if has_bak:
             restore_btn = QPushButton("↩  Restaurar pack original (.bak)")
             restore_btn.clicked.connect(self._restore)
@@ -143,30 +150,36 @@ class PackConfigDialog(QDialog):
             QMessageBox.information(self, "Nada seleccionado", "Elige un subpack primero.")
             return
         reply = QMessageBox.question(
-            self, "Forzar subpack",
-            f"Se fijará «{sp['name']}» para todos los jugadores.\n\n"
-            "Esto modifica los archivos del pack (se guarda copia .bak) y sube su versión "
-            "para que los clientes la vuelvan a descargar.\n\n¿Continuar?",
+            self, "Aplicar subpack",
+            f"Se aplicará «{sp['name']}» para todos los jugadores.\n\n"
+            "Importante: Bedrock no permite indicar el subpack en world_resource_packs.json, "
+            "así que se aplica copiando sus archivos sobre el pack y subiendo su versión "
+            "(se guarda copia .bak para revertir). En el .json solo cambiará la versión.\n\n"
+            "Hazlo con el servidor apagado.\n\n¿Continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
         installer = PackInstaller(self.tab.parent.server_dir, self.tab.parent.world_path() or "")
         try:
-            installer.force_subpack(self.target["kind"], self.target["folder"],
-                                    sp["folder"], self.target.get("uuid"))
+            name = installer.force_subpack(self.target["kind"], self.target["folder"],
+                                           sp["folder"], self.target.get("uuid"))
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
             return
         self.tab.reload_lists()
         self.tab.parent.raw_json_tab.refresh_all()
-        QMessageBox.information(self, "Listo",
-                               f"«{sp['name']}» fijado para todos.\nReinicia el servidor para aplicarlo.")
+        QMessageBox.information(
+            self, "Listo",
+            f"«{name}» aplicado para todos.\n\n"
+            "Reinicia el servidor; los jugadores verán una pequeña descarga por el cambio de versión.\n"
+            "Puedes volver a abrir esta ventana para cambiar a otro subpack cuando quieras.")
         self.accept()
 
     def _restore(self):
         installer = PackInstaller(self.tab.parent.server_dir, self.tab.parent.world_path() or "")
         if installer.restore_pack(self.target["kind"], self.target["folder"]):
-            QMessageBox.information(self, "Restaurado", "Se restauró el pack original.")
+            QMessageBox.information(self, "Restaurado",
+                                   "Se restauró el pack original (sin subpack fijado).")
             self.tab.reload_lists()
             self.accept()
         else:
