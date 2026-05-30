@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Config local de la app (no subir rutas personales)
+.bedrock_manager.json
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

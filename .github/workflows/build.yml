@@ -1,0 +1,46 @@
+name: Build Windows EXE
+
+# Cuándo se ejecuta:
+on:
+  push:
+    branches: [ main, master ]      # en cada push a main/master
+    tags: [ 'v*' ]                  # y en tags de versión (v1.0.0, etc.)
+  workflow_dispatch:                # y manualmente desde la pestaña Actions
+
+permissions:
+  contents: write                   # necesario para adjuntar el .exe a un Release
+
+jobs:
+  build:
+    runs-on: windows-latest         # se compila en Windows para obtener un .exe
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Compilar el .exe
+        run: pyinstaller --onefile --windowed --name BedrockManager --collect-all PyQt6 main.py
+
+      - name: Subir el .exe como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: BedrockManager-windows
+          path: dist/BedrockManager.exe
+
+      # Si el push es un tag de versión (vX.Y.Z), además crea un Release con el .exe
+      - name: Publicar en Release (solo en tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/BedrockManager.exe
