@@ -91,12 +91,14 @@ class PackConfigDialog(QDialog):
             spl.addWidget(restore_btn)
         layout.addWidget(sp_group)
 
-        # ── Settings (client-side, informational) ──
+        # ── Settings (informational) ──
         st_group = QGroupBox("  Ajustes del pack")
         stl = QVBoxLayout(st_group)
-        note = QLabel("ℹ Estos ajustes los elige cada jugador en su propio cliente "
-                      "(el ícono de engranaje en «Recursos globales»). El servidor no puede "
-                      "fijarlos; se muestran aquí como referencia.")
+        note = QLabel("ℹ Según Mojang, los ajustes (toggles/desplegables) de un RESOURCE PACK "
+                      "los elige cada jugador en su cliente; el servidor no puede fijarlos. "
+                      "Lo que SÍ puedes forzar para todos son los subpacks (arriba). "
+                      "Los ajustes de BEHAVIOR PACK sí son por-mundo, pero esa función sigue "
+                      "siendo experimental en Bedrock. Aquí se muestran como referencia.")
         note.setStyleSheet(f"color: {YELLOW};")
         note.setWordWrap(True)
         stl.addWidget(note)

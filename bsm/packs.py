@@ -147,16 +147,25 @@ def lang_map_disk(pack_dir):
 
 def read_pack_config(pack_dir):
     """Read a pack's subpacks and settings (with labels resolved). Returns
-    {'subpacks': [{folder, name}], 'settings': [...]} or None if no manifest."""
+    {'subpacks': [{folder, name}], 'settings': [...]} or None if no manifest.
+    Finds the manifest even if nested, and lists subpack folders found on disk
+    even when the manifest array is missing or unusual."""
     mpath = os.path.join(pack_dir, "manifest.json")
     if not os.path.isfile(mpath):
-        return None
+        mpath = None
+        for r, _dirs, files in os.walk(pack_dir):
+            if "manifest.json" in files:
+                mpath = os.path.join(r, "manifest.json")
+                break
+        if not mpath:
+            return None
+    base = os.path.dirname(mpath)
     try:
         with open(mpath, encoding="utf-8") as f:
             m = json.load(f)
     except Exception:
         return None
-    lang = lang_map_disk(pack_dir)
+    lang = lang_map_disk(base)
 
     def label(s, fallback=""):
         # a setting/option has 'text' (a key) and/or 'name'
@@ -168,10 +177,20 @@ def read_pack_config(pack_dir):
         return strip_mc_format(s.get("name", fallback))
 
     subpacks = []
+    seen = set()
     for sp in m.get("subpacks", []):
-        raw = sp.get("name", sp.get("folder_name", ""))
+        folder = sp.get("folder_name", "")
+        raw = sp.get("name", folder)
         nm = strip_mc_format(raw.split("§")[0]) or strip_mc_format(raw)
-        subpacks.append({"folder": sp.get("folder_name", ""), "name": nm})
+        subpacks.append({"folder": folder, "name": nm})
+        seen.add(folder)
+    # Disk fallback: any subpacks/<folder> on disk not declared in the manifest
+    sp_root = os.path.join(base, "subpacks")
+    if os.path.isdir(sp_root):
+        for d in sorted(os.listdir(sp_root)):
+            if d not in seen and os.path.isdir(os.path.join(sp_root, d)):
+                subpacks.append({"folder": d, "name": d})
+                seen.add(d)
 
     settings = []
     for s in m.get("settings", []):
@@ -182,7 +201,6 @@ def read_pack_config(pack_dir):
         elif t == "dropdown":
             opts = [label(o, o.get("name", "")) for o in s.get("options", [])]
             default = s.get("default", "")
-            # resolve default option label
             dlabel = default
             for o in s.get("options", []):
                 if o.get("name") == default:
